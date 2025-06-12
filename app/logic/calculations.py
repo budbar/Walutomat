@@ -13,17 +13,16 @@ KURSY_SPRZEDAZY = {
     'PLN': 1.0, 'CZK': 0.17, 'JPY': 2.64
 }
 
-
 class TransactionProcessor:
     def __init__(self):
-        self.transactions = []
-        self.total_turnover = 0
+        self.transactions = [] # Lista transakcji
+        self.total_turnover = 0 # Obrót
         self.total_commission = 0
         self.total_points = 0
         self.processed_transactions = []
 
+    # Dodawanie transakcji do listy transakcji
     def add_transaction(self, transaction_data):
-        """Dodaje transakcję do listy"""
         transaction = {
             'kwota': transaction_data['kwota'],
             'waluta_wej': transaction_data['waluta_wej'],
@@ -32,28 +31,27 @@ class TransactionProcessor:
             'punkty': transaction_data.get('punkty', 0),
             'karta': transaction_data.get('karta', False),
             'akcja': transaction_data.get('akcja', False),
-            'processed': False,
+            'processed': False, # Flaga oznaczająca przetworzenie transakcji
             'id': len(self.transactions) + 1
         }
         self.transactions.append(transaction)
         return transaction['id']
 
+    # Przeliczamy transakcję na plny, bo to waluta bazowa
     def calculate_pln_value(self, kwota, waluta, operacja):
-        """Przelicza wartość na PLN"""
         if waluta.upper() == 'PLN':
             return kwota
 
+        # Użytkownik sprzedaje, walutomat kupuje
         if operacja == 'sprzedaz':
-            # Użytkownik sprzedaje, walutomat kupuje
             kurs = KURSY_KUPNA.get(waluta.upper(), 1.0)
-        else:  # kupno
-            # Użytkownik kupuje, walutomat sprzedaje
+        else:  # Użytkownik kupuje, walutomat sprzedaje
             kurs = KURSY_SPRZEDAZY.get(waluta.upper(), 1.0)
 
         return kwota * kurs
 
+    # Przetwarzanie transakcji
     def process_all_transactions(self):
-        """Przetwarza wszystkie transakcje sekwencyjnie"""
         self.total_turnover = 0
         self.total_commission = 0
         self.total_points = 0
@@ -86,8 +84,8 @@ class TransactionProcessor:
 
         return self.get_summary()
 
+    # Przetwarzanie pojedynczej transakcji
     def calculate_single_transaction(self, transaction, current_turnover):
-        """Oblicza pojedynczą transakcję z uwzględnieniem aktualnego obrotu"""
         engine = SystemEkspercki()
         engine.reset()
 
@@ -167,8 +165,8 @@ class TransactionProcessor:
             'aktualna_prowizja': prowizja
         }
 
+    # Podsumowanie wszystkich transakcji
     def get_summary(self):
-        """Zwraca podsumowanie wszystkich transakcji"""
         return {
             'liczba_transakcji': len(self.processed_transactions),
             'laczny_obrot_pln': self.total_turnover,
@@ -177,6 +175,7 @@ class TransactionProcessor:
             'transakcje': self.processed_transactions,
             'aktualna_prowizja': self.get_current_commission_rate()
         }
+
 
     def get_current_commission_rate(self):
         """Zwraca aktualną stawkę prowizji na podstawie obrotu"""
@@ -191,6 +190,7 @@ class TransactionProcessor:
         else:
             return 0.06
 
+    # Resetowanie transakcji
     def reset_transactions(self):
         """Resetuje wszystkie transakcje"""
         self.transactions = []
