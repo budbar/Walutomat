@@ -1,230 +1,204 @@
-from app.engine.rules import SystemEkspercki
-from app.models.facts import WymianaWalut
-
-# Walutomat kupuje od użytkownika
-KURSY_KUPNA = {
-    'EUR': 4.23, 'USD': 3.71, 'GBP': 5.02,
-    'PLN': 1.0, 'CZK': 0.16, 'JPY': 2.58
-}
-
-# Walutomat sprzedaje klientowi
-KURSY_SPRZEDAZY = {
-    'EUR': 4.31, 'USD': 3.79, 'GBP': 5.12,
-    'PLN': 1.0, 'CZK': 0.17, 'JPY': 2.64
-}
+from app.engine.rules import ExpertSystem
+from app.models.facts import CurrencyExchange
 
 class TransactionProcessor:
     def __init__(self):
-        self.transactions = [] # Lista transakcji
-        self.total_turnover = 0 # Obrót
+        self.transactions = []  # Lista transakcji
+        self.total_trading = 0  # Obrót
         self.total_commission = 0
-        self.total_points = 0
         self.processed_transactions = []
 
-    # Dodawanie transakcji do listy transakcji
     def add_transaction(self, transaction_data):
         transaction = {
-            'kwota': transaction_data['kwota'],
-            'waluta_wej': transaction_data['waluta_wej'],
-            'waluta_wyj': transaction_data['waluta_wyj'],
-            'operacja': transaction_data['operacja'],
-            'punkty': transaction_data.get('punkty', 0),
-            'karta': transaction_data.get('karta', False),
-            'akcja': transaction_data.get('akcja', False),
-            'processed': False, # Flaga oznaczająca przetworzenie transakcji
+            'amount': transaction_data['amount'],
+            'currency_in': transaction_data['currency_in'],
+            'currency_out': transaction_data['currency_out'],
+            'operation': transaction_data['operation'],
+            'card': transaction_data.get('card', False),
+            'processed': False,  # Flaga oznaczająca przetworzenie transakcji
             'id': len(self.transactions) + 1
         }
+
         self.transactions.append(transaction)
+
         return transaction['id']
 
-    # Przeliczamy transakcję na plny, bo to waluta bazowa
-    def calculate_pln_value(self, kwota, waluta, operacja):
-        if waluta.upper() == 'PLN':
-            return kwota
+    def get_exchange_rate_from_expert_system(self, amount, currency_in, currency_out, operation, current_trading, card):
+        engine = ExpertSystem()
+        engine.reset()
 
-        # Użytkownik sprzedaje, walutomat kupuje
-        if operacja == 'sprzedaz':
-            kurs = KURSY_KUPNA.get(waluta.upper(), 1.0)
-        else:  # Użytkownik kupuje, walutomat sprzedaje
-            kurs = KURSY_SPRZEDAZY.get(waluta.upper(), 1.0)
+        engine.declare(CurrencyExchange(
+            total_trading=current_trading,
+            card=card,
+            amount=amount,
+            currency_in=currency_in.upper(),
+            currency_out=currency_out.upper(),
+            operation=operation
+        ))
 
-        return kwota * kurs
+        engine.run()
 
-    # Przetwarzanie transakcji
+        results = {
+            'commision': 0.002,  # domyślne wartości
+            'commision_percentage': 0.2,
+            'exchange_rate_in': 1.0,
+            'exchange_rate_out': 1.0
+        }
+
+        for fact_id, fact in engine.facts.items():
+            if 'commision' in fact:
+                results['commision'] = fact['commision']
+            if 'commision_percentage' in fact:
+                results['commision_percentage'] = fact['commision_percentage']
+            if 'exchange_rate_in' in fact:
+                results['exchange_rate_in'] = fact['exchange_rate_in']
+            if 'exchange_rate_out' in fact:
+                results['exchange_rate_out'] = fact['exchange_rate_out']
+
+        return results
+
+    def calculate_pln_value(self, amount, currency, operation, expert_results):
+        if currency.upper() == 'PLN':
+            return amount
+
+        exchange_rate = expert_results['exchange_rate_in']
+        return amount * exchange_rate
+
     def process_all_transactions(self):
-        self.total_turnover = 0
+        self.total_trading = 0
         self.total_commission = 0
-        self.total_points = 0
         self.processed_transactions = []
 
         for transaction in self.transactions:
             if not transaction['processed']:
-                # Oblicz wartość w PLN dla obrotu
-                pln_value = self.calculate_pln_value(
-                    transaction['kwota'],
-                    transaction['waluta_wej'],
-                    transaction['operacja']
+                expert_results = self.get_exchange_rate_from_expert_system(
+                    transaction['amount'],
+                    transaction['currency_in'],
+                    transaction['currency_out'],
+                    transaction['operation'],
+                    self.total_trading,  # Użyj aktualnego obrotu
+                    transaction['card'],
                 )
 
-                # Dodaj do łącznego obrotu
-                self.total_turnover += pln_value
+                pln_value = self.calculate_pln_value(
+                    transaction['amount'],
+                    transaction['currency_in'],
+                    transaction['operation'],
+                    expert_results
+                )
 
-                # Uruchom system ekspercki z aktualnym obrotem
-                result = self.calculate_single_transaction(transaction, self.total_turnover)
+                self.total_trading += pln_value
 
-                # Oznacz jako przetworzoną
+                result = self.calculate_single_transaction(transaction, self.total_trading)
+
                 transaction['processed'] = True
                 transaction['result'] = result
 
                 self.processed_transactions.append(transaction)
 
-                # Dodaj do łącznych sum
-                self.total_commission += result['prowizja_kwotowa']
-                self.total_points += result['punkty_zdobyte']
+                self.total_commission += result['quota_commision']
 
         return self.get_summary()
 
-    # Przetwarzanie pojedynczej transakcji
-    def calculate_single_transaction(self, transaction, current_turnover):
-        engine = SystemEkspercki()
+    def calculate_single_transaction(self, transaction, current_trading):
+        expert_results = self.get_exchange_rate_from_expert_system(
+            transaction['amount'],
+            transaction['currency_in'],
+            transaction['currency_out'],
+            transaction['operation'],
+            current_trading,
+            transaction['card'],
+        )
+
+        amount = transaction['amount']
+        currency_in = transaction['currency_in']
+        currency_out = transaction['currency_out']
+        operation = transaction['operation']
+
+        commision = expert_results['commision']
+        commision_percentage = expert_results['commision_percentage']
+        exchange_rate_in = expert_results['exchange_rate_in']
+        exchange_rate_out = expert_results['exchange_rate_out']
+
+        amount_in_pln = amount * exchange_rate_in
+
+        quota_commision = amount_in_pln * commision
+        amount_after_commision = amount_in_pln - quota_commision
+
+        final_amount = amount_after_commision / exchange_rate_out
+
+        return {
+            'operation': operation,
+            'input_amount': amount,
+            'currency_in': currency_in,
+            'amount_in_pln': amount_in_pln,
+            'commision_percentage': commision_percentage,
+            'quota_commision': quota_commision,
+            'amount_after_commision': amount_after_commision,
+            'final_amount': final_amount,
+            'currency_out': currency_out,
+            'exchange_rate_in': exchange_rate_in,
+            'exchange_rate_out': exchange_rate_out,
+            'current_commision': commision,
+        }
+
+    def get_summary(self):
+        if self.processed_transactions:
+            last_commision = self.processed_transactions[-1]['result']['commision_percentage']
+        else:
+            last_commision = self.get_current_commission()
+
+        return {
+            'number_of_transactions': len(self.processed_transactions),
+            'total_trading_in_pln': self.total_trading,
+            'total_commision': self.total_commission,
+            'transactions': self.processed_transactions,
+            'current_commision': last_commision
+        }
+
+    def get_current_commission(self):
+        engine = ExpertSystem()
         engine.reset()
 
-        # Użyj aktualnego obrotu dla systemu eksperckiego
-        engine.declare(WymianaWalut(
-            obrot_calkowity=current_turnover,
-            karta=transaction['karta'],
-            akcja=transaction['akcja'],
-            punkty=transaction['punkty']
+        engine.declare(CurrencyExchange(
+            total_trading=self.total_trading,
+            card=False,  # Sprawdzamy podstawową prowizję
         ))
+
         engine.run()
 
-        # Pobierz prowizję z systemu eksperckiego
-        prowizja = 0.002  # domyślna prowizja
-        punkty_bonus = 0
+        for fact_id, fact in engine.facts.items():
+            if 'commision_percentage' in fact:
+                return fact['commision_percentage']
 
-        for fact in engine.facts.values():
-            if isinstance(fact, dict):
-                if 'prowizja' in fact:
-                    prowizja = fact['prowizja']
-                if 'punkty_bonus' in fact:
-                    punkty_bonus = fact['punkty_bonus']
+        return 0.2
 
-        # Oblicz szczegóły transakcji
-        kwota = transaction['kwota']
-        waluta_wej = transaction['waluta_wej']
-        waluta_wyj = transaction['waluta_wyj']
-        operacja = transaction['operacja']
-
-        kurs_wej_kupno = KURSY_KUPNA.get(waluta_wej.upper(), 1.0)
-        kurs_wej_sprzedaz = KURSY_SPRZEDAZY.get(waluta_wej.upper(), 1.0)
-        kurs_wyj_kupno = KURSY_KUPNA.get(waluta_wyj.upper(), 1.0)
-        kurs_wyj_sprzedaz = KURSY_SPRZEDAZY.get(waluta_wyj.upper(), 1.0)
-
-        # Przelicz na PLN
-        if operacja == 'sprzedaz':
-            kwota_w_pln = kwota * kurs_wej_kupno
-        else:
-            kwota_w_pln = kwota * kurs_wej_sprzedaz
-
-        # Oblicz prowizję
-        prowizja_kwotowa = kwota_w_pln * prowizja
-        kwota_po_prowizji = kwota_w_pln - prowizja_kwotowa
-
-        # Oblicz kwotę końcową
-        if operacja == 'sprzedaz':
-            kwota_koncowa = kwota_po_prowizji / kurs_wyj_sprzedaz
-            kurs_wyj_uzyty = kurs_wyj_sprzedaz
-        else:
-            kwota_koncowa = kwota_po_prowizji / kurs_wyj_kupno
-            kurs_wyj_uzyty = kurs_wyj_kupno
-
-        # Oblicz punkty
-        punkty_za_kwote = 0
-        if waluta_wej.upper() in ['EUR', 'USD', 'GBP']:
-            punkty_za_kwote = kwota // 10
-        elif waluta_wej.upper() == 'PLN':
-            punkty_za_kwote = kwota // 50
-        elif waluta_wej.upper() in ['CZK', 'JPY']:
-            punkty_za_kwote = kwota // 1000
-
-        punkty_zdobyte = int(punkty_za_kwote + punkty_bonus)
-
-        return {
-            'operacja': operacja,
-            'kwota_wejsciowa': kwota,
-            'waluta_wej': waluta_wej,
-            'kwota_w_pln': kwota_w_pln,
-            'prowizja_procent': prowizja * 100,
-            'prowizja_kwotowa': prowizja_kwotowa,
-            'kwota_po_prowizji': kwota_po_prowizji,
-            'kwota_koncowa': kwota_koncowa,
-            'waluta_wyj': waluta_wyj,
-            'kurs_uzyty': kurs_wyj_uzyty,
-            'punkty_bonus': punkty_bonus,
-            'punkty_zdobyte': punkty_zdobyte,
-            'aktualna_prowizja': prowizja
-        }
-
-    # Podsumowanie wszystkich transakcji
-    def get_summary(self):
-        return {
-            'liczba_transakcji': len(self.processed_transactions),
-            'laczny_obrot_pln': self.total_turnover,
-            'laczna_prowizja': self.total_commission,
-            'laczne_punkty': self.total_points,
-            'transakcje': self.processed_transactions,
-            'aktualna_prowizja': self.get_current_commission_rate()
-        }
-
-
-    def get_current_commission_rate(self):
-        """Zwraca aktualną stawkę prowizji na podstawie obrotu"""
-        if self.total_turnover < 200_000:
-            return 0.2
-        elif 200_000 <= self.total_turnover <= 1_000_000:
-            return 0.15
-        elif 1_000_000 < self.total_turnover <= 3_000_000:
-            return 0.1
-        elif 3_000_000 < self.total_turnover <= 10_000_000:
-            return 0.08
-        else:
-            return 0.06
-
-    # Resetowanie transakcji
     def reset_transactions(self):
-        """Resetuje wszystkie transakcje"""
         self.transactions = []
-        self.total_turnover = 0
+        self.total_trading = 0
         self.total_commission = 0
-        self.total_points = 0
         self.processed_transactions = []
 
 
-# Funkcja kompatybilności z oryginalnym kodem
-def oblicz_wymiane(kwota, waluta_wej, waluta_wyj, punkty, karta, akcja, obrot, operacja):
-    """Funkcja kompatybilności - oblicza pojedynczą wymianę"""
+def calculate_exchange(amount, currency_in, currency_out, card, trading, operation):
     processor = TransactionProcessor()
     transaction_data = {
-        'kwota': kwota,
-        'waluta_wej': waluta_wej,
-        'waluta_wyj': waluta_wyj,
-        'operacja': operacja,
-        'punkty': punkty,
-        'karta': karta,
-        'akcja': akcja
+        'amount': amount,
+        'currency_in': currency_in,
+        'currency_out': currency_out,
+        'operation': operation,
+        'card': card,
     }
 
     processor.add_transaction(transaction_data)
-    processor.total_turnover = obrot  # Ustaw obrót ręcznie
-    result = processor.calculate_single_transaction(processor.transactions[0], obrot)
+    processor.total_turnover = trading
+    result = processor.calculate_single_transaction(processor.transactions[0], trading)
 
     return (
-        f"Operacja: {result['operacja'].upper()}\n"
-        f"Kwota wejściowa: {result['kwota_wejsciowa']:.2f} {result['waluta_wej'].upper()}\n"
-        f"Kwota w PLN: {result['kwota_w_pln']:.2f} PLN\n"
-        f"Prowizja: {result['prowizja_kwotowa']:.2f} PLN ({result['prowizja_procent']:.2f}%)\n"
-        f"Kwota po prowizji: {result['kwota_po_prowizji']:.2f} PLN\n"
-        f"Otrzymasz: {result['kwota_koncowa']:.2f} {result['waluta_wyj'].upper()} (po kursie {result['kurs_uzyty']:.4f})\n"
-        f"Punkty za udział w akcji specjalnej: {result['punkty_bonus']}\n"
-        f"Zdobyte punkty: {result['punkty_zdobyte']}"
+        f"Operacja: {result['operation'].upper()}\n"
+        f"Kwota wejściowa: {result['input_amount']:.2f} {result['currency_in'].upper()}\n"
+        f"Kwota w PLN: {result['amount_in_pln']:.2f} PLN\n"
+        f"Prowizja: {result['quota_commision']:.2f} PLN ({result['commision_percentage']:.3f}%)\n"
+        f"Kwota po prowizji: {result['amount_after_commision']:.2f} PLN\n"
+        f"Otrzymasz: {result['final_amount']:.2f} {result['currency_out'].upper()} (po kursie {result['exchange_rate_out']:.4f})\n"
     )
